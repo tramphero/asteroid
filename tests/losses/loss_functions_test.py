@@ -12,8 +12,26 @@ from asteroid.losses import SingleSrcNegSTOI
 from asteroid.losses.multi_scale_spectral import SingleSrcMultiScaleSpectral
 
 
-@pytest.mark.parametrize("n_src", [2, 3, 4])
-@pytest.mark.parametrize(
+def assert_loss_checks_shape(loss_func, shape_schema):
+    """Test that `loss_func` raises a TypeError if you are passing anything that isn't of the expected shape."""
+
+    def _test(shape):
+        loss_func(torch.randn(shape), torch.randn(shape))
+
+    batch_size = 5
+    shape = (batch_size, *shape_schema[1:])
+    # Check that given shape works.
+    _test(shape)
+    # Batch must always be set.
+    with pytest.raises(TypeError):
+        _test(shape[1:])
+    # Random unsqueezes should fail.
+    for dim in range(len(shape)):
+        with pytest.raises(TypeError):
+            _test((*shape[:dim], 1, *shape[dim:]))
+
+
+sisdr_and_mse_function_triplets = pytest.mark.parametrize(
     "function_triplet",
     [
         [sdr.pairwise_neg_sisdr, sdr.singlesrc_neg_sisdr, sdr.multisrc_neg_sisdr],
@@ -22,16 +40,20 @@ from asteroid.losses.multi_scale_spectral import SingleSrcMultiScaleSpectral
         [pairwise_mse, singlesrc_mse, multisrc_mse],
     ],
 )
-def test_sisdr(n_src, function_triplet):
+
+
+@pytest.mark.parametrize("n_src", [2, 3, 4])
+@sisdr_and_mse_function_triplets
+def test_sisdr_and_mse(n_src, function_triplet):
     # Unpack the triplet
-    pairwise, nosrc, nonpit = function_triplet
+    pairwise, singlesrc, multisrc = function_triplet
     # Fake targets and estimates
     targets = torch.randn(2, n_src, 10000)
     est_targets = torch.randn(2, n_src, 10000)
     # Create the 3 PIT wrappers
     pw_wrapper = PITLossWrapper(pairwise, pit_from="pw_mtx")
-    wo_src_wrapper = PITLossWrapper(nosrc, pit_from="pw_pt")
-    w_src_wrapper = PITLossWrapper(nonpit, pit_from="perm_avg")
+    wo_src_wrapper = PITLossWrapper(singlesrc, pit_from="pw_pt")
+    w_src_wrapper = PITLossWrapper(multisrc, pit_from="perm_avg")
 
     # Circular tests on value
     assert_allclose(pw_wrapper(est_targets, targets), wo_src_wrapper(est_targets, targets))
@@ -46,6 +68,14 @@ def test_sisdr(n_src, function_triplet):
         wo_src_wrapper(est_targets, targets, return_est=True)[1],
         w_src_wrapper(est_targets, targets, return_est=True)[1],
     )
+
+
+@sisdr_function_triplets
+def test_sisdr_and_mse_shape_checks(function_triplet):
+    pairwise, singlesrc, multisrc = function_triplet
+    assert_loss_checks_shape(pairwise, (..., 3, 1000))
+    assert_loss_checks_shape(singlesrc, (..., 1000))
+    assert_loss_checks_shape(multisrc, (..., 3, 1000))
 
 
 @pytest.mark.parametrize("spk_cnt", [2, 3, 4])
